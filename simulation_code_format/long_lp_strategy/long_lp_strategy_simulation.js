@@ -2,7 +2,7 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 
 // Constants
-const asset = "Etherium";
+const asset = "Ethereum";
 const monthlyInvestment = 150;
 const annualInterestRate = 0.02;
 const monthlyInterestRate = annualInterestRate / 12;
@@ -26,12 +26,18 @@ const ethPriceScenarios = {
     4: 3300, 5: 3300, 6: 3300,
     7: 2800, 8: 2800, 9: 2800,
     10: 2200, 11: 2200, 12: 2200
+  },
+  "Scenario 3 - Volatile": {
+    1: 2200, 2: 3300, 3: 2500,
+    4: 4000, 5: 2000, 6: 3600,
+    7: 2800, 8: 3100, 9: 2700,
+    10: 3900, 11: 2100, 12: 4000
   }
 };
 
-// Column Descriptions
+// README Columns with Descriptions and Formulas
 const columnDescriptions = [
-  { Column: "Scenario", Description: "ETH price scenario name", Formula: "One of the defined scenarios" },
+  { Column: "Scenario", Description: "Name of the ETH price scenario.", Formula: "From ETH price scenario object" },
   { Column: "Month", Description: "Represents the month number in the simulation (1-12).", Formula: "Incremental: 1 through 12" },
   { Column: "ETH Price at Deposit ($/ETH)", Description: "The ETH price at the end of the month used for deposit.", Formula: "From ETH price scenario object" },
   { Column: "Deposit Amount ($)", Description: "The amount of money invested monthly in USD.", Formula: `Constant: $${monthlyInvestment}` },
@@ -40,7 +46,7 @@ const columnDescriptions = [
   { Column: "Total ETH Value (USD)", Description: "Value of total ETH held (with interest) at current ETH price.", Formula: "Total ETH With Interest * ETH Price" },
   { Column: "Borrowed Amount (This Month, $)", Description: "The new borrowed amount to maintain a 45% LTV in this month.", Formula: "(Total Capital * 0.45) - Total Borrowed" },
   { Column: "Total Borrowed with Interest ($)", Description: "Total borrowed amount accumulated with interest.", Formula: "(Previous Total Borrowed + This Month Borrowed) * (1 + monthlyInterestRate)" },
-  { Column: "Borrow Rate (%)", Description: "Borrowed amount for this month as a percentage of capital.", Formula: "(This Month Borrowed / Total Capital) * 100" },
+  { Column: "Borrow Rate (Decimal)", Description: "Borrowed amount for this month as a decimal of capital. If Borrow Rate is negative, no borrowing occurs.", Formula: "(This Month Borrowed / Total Capital)" },
   { Column: "LTV (%)", Description: "Loan-to-Value ratio based on current capital.", Formula: "(Total Borrowed / Total Capital) * 100" },
   { Column: "LP Growth ($)", Description: "Cumulative growth of funds added to LP using borrowed capital.", Formula: "Σ (This Month Borrowed)" },
   { Column: "Impermanent Loss (%)", Description: "Impermanent loss percentage due to ETH price divergence from original price ($2200).", Formula: "1 - (2 * √(p1/p0)) / (1 + p1/p0)" },
@@ -52,16 +58,14 @@ const columnDescriptions = [
   { Column: "Profit ($)", Description: "Net capital + LP - Total Deposits, representing final profit/loss.", Formula: "Net Capital - Total Deposits + LP Value" }
 ];
 
-// Utility functions
-const format = (val, digits = 2) => typeof val === "number" ? val.toFixed(digits) : val;
+const format = (val, digits = 2) => typeof val === "number" ? Number(val.toFixed(digits)) : val;
 
 function calculateIL(p0, p1) {
   const r = p1 / p0;
   return Math.max(0, 1 - (2 * Math.sqrt(r)) / (1 + r));
 }
 
-// Main calculator
-function createScenarioSheet(ethPricesAtEnd, scenarioName) {
+function createScenarioSheet(scenarioName, ethPricesAtEnd) {
   const data = [];
   let lpGrowth = 0;
   let totalBorrowedAmount = 0;
@@ -80,7 +84,13 @@ function createScenarioSheet(ethPricesAtEnd, scenarioName) {
     const totalCapital = totalETHValueInUSD + lpGrowth;
 
     const targetBorrowAmount = totalCapital * 0.45;
-    const borrowedAmountInUSD = targetBorrowAmount - totalBorrowedAmount;
+    let borrowedAmountInUSD = targetBorrowAmount - totalBorrowedAmount;
+
+    // If borrowed amount is negative, set it to 0 (no borrowing)
+    if (borrowedAmountInUSD < 0) {
+      borrowedAmountInUSD = 0;
+    }
+
     totalBorrowedAmount = (totalBorrowedAmount + borrowedAmountInUSD) * (1 + monthlyInterestRate);
 
     lpGrowth += borrowedAmountInUSD;
@@ -97,7 +107,7 @@ function createScenarioSheet(ethPricesAtEnd, scenarioName) {
 
     totalDepositedAmount += monthlyInvestment;
     const profit = lpFinal + (netCapitalInUSD - totalDepositedAmount);
-    const borrowRatePercentage = (borrowedAmountInUSD / totalCapital) * 100;
+    const borrowRateDecimal = (borrowedAmountInUSD / totalCapital);  // Corrected Borrow Rate formula
     const LTVPercentage = (totalBorrowedAmount / totalCapital) * 100;
 
     data.push({
@@ -110,7 +120,7 @@ function createScenarioSheet(ethPricesAtEnd, scenarioName) {
       "Total ETH Value (USD)": format(totalETHValueInUSD),
       "Borrowed Amount (This Month, $)": format(borrowedAmountInUSD),
       "Total Borrowed with Interest ($)": format(totalBorrowedAmount),
-      "Borrow Rate (%)": format(borrowRatePercentage),
+      "Borrow Rate (Decimal)": format(borrowRateDecimal, 4),  // Corrected Borrow Rate
       "LTV (%)": format(LTVPercentage),
       "LP Growth ($)": format(lpGrowth),
       "Impermanent Loss (%)": format(il * 100),
@@ -126,32 +136,28 @@ function createScenarioSheet(ethPricesAtEnd, scenarioName) {
   return data;
 }
 
-// Write Excel Workbook
+const allCombinedData = [];
+
+// Create workbook
 const workbook = XLSX.utils.book_new();
 
-// Add README sheet
+// README Sheet
 const readmeSheet = XLSX.utils.json_to_sheet(columnDescriptions);
 XLSX.utils.book_append_sheet(workbook, readmeSheet, 'README');
 
-// Generate unified sheet
-let allCombinedData = [];
-const includePerScenarioSheets = true;
-
+// Add each scenario and collect all data
 for (const [scenarioName, priceData] of Object.entries(ethPriceScenarios)) {
-  const scenarioData = createScenarioSheet(priceData, scenarioName);
-  allCombinedData = allCombinedData.concat(scenarioData);
-
-  if (includePerScenarioSheets) {
-    const sheet = XLSX.utils.json_to_sheet(scenarioData);
-    XLSX.utils.book_append_sheet(workbook, sheet, scenarioName);
-  }
+  const sheetData = createScenarioSheet(scenarioName, priceData);
+  allCombinedData.push(...sheetData);
+  const sheet = XLSX.utils.json_to_sheet(sheetData);
+  XLSX.utils.book_append_sheet(workbook, sheet, scenarioName);
 }
 
-// Add combined sheet
+// Add Combined Sheet
 const combinedSheet = XLSX.utils.json_to_sheet(allCombinedData);
-XLSX.utils.book_append_sheet(workbook, combinedSheet, 'Combined Scenarios');
+XLSX.utils.book_append_sheet(workbook, combinedSheet, 'All Combined');
 
-// Save file
+// Save workbook
 const filename = `${asset} Long LP Strategy Simulation.xlsx`;
 XLSX.writeFile(workbook, filename);
 console.log(`✅ File generated: ${filename}`);
