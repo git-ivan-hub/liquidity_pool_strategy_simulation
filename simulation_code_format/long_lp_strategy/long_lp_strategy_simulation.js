@@ -2,7 +2,7 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 
 // Constants
-const asset = "Etherium" 
+const asset = "Etherium";
 const monthlyInvestment = 150;
 const annualInterestRate = 0.02;
 const monthlyInterestRate = annualInterestRate / 12;
@@ -29,26 +29,99 @@ const ethPriceScenarios = {
   }
 };
 
-// Column Descriptions for README sheet
+
+// README Columns with Descriptions and Formulas
 const columnDescriptions = [
-  { Column: "Month", Description: "Represents the month number in the simulation (1-12)." },
-  { Column: "ETH Price at Deposit ($/ETH)", Description: "The ETH price at the end of the month used for deposit." },
-  { Column: "Deposit Amount ($)", Description: "The amount of money invested monthly in USD." },
-  { Column: "Total ETH Held Without Interest (ETH)", Description: "Total accumulated ETH from deposits, without compounding interest." },
-  { Column: "Total ETH Held With Interest (ETH)", Description: "Total ETH including monthly compounding interest." },
-  { Column: "Total ETH Value (USD)", Description: "Value of total ETH held (with interest) at current ETH price." },
-  { Column: "Borrowed Amount (This Month, $)", Description: "The new borrowed amount to maintain a 45% LTV in this month." },
-  { Column: "Total Borrowed with Interest ($)", Description: "Total borrowed amount accumulated with interest." },
-  { Column: "Borrow Rate (%)", Description: "Borrowed amount for this month as a percentage of capital." },
-  { Column: "LTV (%)", Description: "Loan-to-Value ratio based on current capital." },
-  { Column: "LP Growth ($)", Description: "Cumulative growth of funds added to LP using borrowed capital." },
-  { Column: "Impermanent Loss (%)", Description: "Impermanent loss percentage due to ETH price divergence from original price." },
-  { Column: "LP Value After IL ($)", Description: "Liquidity Pool value after applying impermanent loss." },
-  { Column: "Gas Fee (Base Chain) ($)", Description: "Fixed gas fees paid monthly (lend, borrow, LP) on the Base chain." },
-  { Column: "Net Capital ($)", Description: "Final capital after adding ETH value, LP, deducting gas and debt." },
-  { Column: "ETH Liquidation Price ($)", Description: "Price at which ETH would trigger liquidation based on current LTV." },
-  { Column: "Liquidated?", Description: "Whether your position would be liquidated this month ('Yes' or 'No')." },
-  { Column: "Profit ($)", Description: "Net capital + LP - Total Deposits, representing final profit/loss." }
+  {
+    Column: "Month",
+    Description: "Represents the month number in the simulation (1-12).",
+    Formula: "Incremental: 1 through 12"
+  },
+  {
+    Column: "ETH Price at Deposit ($/ETH)",
+    Description: "The ETH price at the end of the month used for deposit.",
+    Formula: "From ETH price scenario object"
+  },
+  {
+    Column: "Deposit Amount ($)",
+    Description: "The amount of money invested monthly in USD.",
+    Formula: `Constant: $${monthlyInvestment}`
+  },
+  {
+    Column: "Total ETH Held Without Interest (ETH)",
+    Description: "Total accumulated ETH from deposits, without compounding interest.",
+    Formula: "Σ (Deposit Amount / ETH Price)"
+  },
+  {
+    Column: "Total ETH Held With Interest (ETH)",
+    Description: "Total ETH including monthly compounding interest.",
+    Formula: "(Previous ETH + new ETH) * (1 + monthlyInterestRate)"
+  },
+  {
+    Column: "Total ETH Value (USD)",
+    Description: "Value of total ETH held (with interest) at current ETH price.",
+    Formula: "Total ETH With Interest * ETH Price"
+  },
+  {
+    Column: "Borrowed Amount (This Month, $)",
+    Description: "The new borrowed amount to maintain a 45% LTV in this month.",
+    Formula: "(Total Capital * 0.45) - Total Borrowed"
+  },
+  {
+    Column: "Total Borrowed with Interest ($)",
+    Description: "Total borrowed amount accumulated with interest.",
+    Formula: "(Previous Total Borrowed + This Month Borrowed) * (1 + monthlyInterestRate)"
+  },
+  {
+    Column: "Borrow Rate (%)",
+    Description: "Borrowed amount for this month as a percentage of capital.",
+    Formula: "(This Month Borrowed / Total Capital) * 100"
+  },
+  {
+    Column: "LTV (%)",
+    Description: "Loan-to-Value ratio based on current capital.",
+    Formula: "(Total Borrowed / Total Capital) * 100"
+  },
+  {
+    Column: "LP Growth ($)",
+    Description: "Cumulative growth of funds added to LP using borrowed capital.",
+    Formula: "Σ (This Month Borrowed)"
+  },
+  {
+    Column: "Impermanent Loss (%)",
+    Description: "Impermanent loss percentage due to ETH price divergence from original price ($2200).",
+    Formula: "1 - (2 * √(p1/p0)) / (1 + p1/p0)"
+  },
+  {
+    Column: "LP Value After IL ($)",
+    Description: "Liquidity Pool value after applying impermanent loss.",
+    Formula: "LP Growth * (1 - IL)"
+  },
+  {
+    Column: "Gas Fee (Base Chain) ($)",
+    Description: "Fixed gas fees paid monthly (lend, borrow, LP) on the Base chain.",
+    Formula: `${gasFeeLend} + ${gasFeeBorrow} + ${gasFeeProvideLiquidity}`
+  },
+  {
+    Column: "Net Capital ($)",
+    Description: "Final capital after adding ETH value, LP, deducting gas and debt.",
+    Formula: "ETH Value + LP Value - Total Borrowed - Gas Fee"
+  },
+  {
+    Column: "ETH Liquidation Price ($)",
+    Description: "Price at which ETH would trigger liquidation based on current LTV.",
+    Formula: "(Total Borrowed * 0.825) / Total ETH Held"
+  },
+  {
+    Column: "Liquidated?",
+    Description: "Whether your position would be liquidated this month ('Yes' or 'No').",
+    Formula: "Yes if LTV > 82.5%, else No"
+  },
+  {
+    Column: "Profit ($)",
+    Description: "Net capital + LP - Total Deposits, representing final profit/loss.",
+    Formula: "Net Capital - Total Deposits + LP Value"
+  }
 ];
 
 // Utility
