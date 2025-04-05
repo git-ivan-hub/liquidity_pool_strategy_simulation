@@ -1,0 +1,143 @@
+const XLSX = require('xlsx');
+const fs = require('fs');
+
+// Constants
+const asset = "Etherium" 
+const monthlyInvestment = 150;
+const annualInterestRate = 0.02;
+const monthlyInterestRate = annualInterestRate / 12;
+const liquidationThreshold = 0.825;
+const months = 12;
+const gasFeeLend = 0.02;
+const gasFeeBorrow = 0.03;
+const gasFeeProvideLiquidity = 0.05;
+const totalGasFeePerMonth = gasFeeLend + gasFeeBorrow + gasFeeProvideLiquidity;
+
+// ETH Price Scenarios
+const ethPriceScenarios = {
+  "Scenario 1 - Gradual Increase": {
+    1: 2200, 2: 2200, 3: 2200,
+    4: 2800, 5: 2800, 6: 2800,
+    7: 3300, 8: 3300, 9: 3300,
+    10: 4000, 11: 4000, 12: 4000
+  },
+  "Scenario 2 - Gradual Decrease": {
+    1: 4000, 2: 4000, 3: 4000,
+    4: 3300, 5: 3300, 6: 3300,
+    7: 2800, 8: 2800, 9: 2800,
+    10: 2200, 11: 2200, 12: 2200
+  }
+};
+
+// Column Descriptions for README sheet
+const columnDescriptions = [
+  { Column: "Month", Description: "Represents the month number in the simulation (1-12)." },
+  { Column: "ETH Price at Deposit ($/ETH)", Description: "The ETH price at the end of the month used for deposit." },
+  { Column: "Deposit Amount ($)", Description: "The amount of money invested monthly in USD." },
+  { Column: "Total ETH Held Without Interest (ETH)", Description: "Total accumulated ETH from deposits, without compounding interest." },
+  { Column: "Total ETH Held With Interest (ETH)", Description: "Total ETH including monthly compounding interest." },
+  { Column: "Total ETH Value (USD)", Description: "Value of total ETH held (with interest) at current ETH price." },
+  { Column: "Borrowed Amount (This Month, $)", Description: "The new borrowed amount to maintain a 45% LTV in this month." },
+  { Column: "Total Borrowed with Interest ($)", Description: "Total borrowed amount accumulated with interest." },
+  { Column: "Borrow Rate (%)", Description: "Borrowed amount for this month as a percentage of capital." },
+  { Column: "LTV (%)", Description: "Loan-to-Value ratio based on current capital." },
+  { Column: "LP Growth ($)", Description: "Cumulative growth of funds added to LP using borrowed capital." },
+  { Column: "Impermanent Loss (%)", Description: "Impermanent loss percentage due to ETH price divergence from original price." },
+  { Column: "LP Value After IL ($)", Description: "Liquidity Pool value after applying impermanent loss." },
+  { Column: "Gas Fee (Base Chain) ($)", Description: "Fixed gas fees paid monthly (lend, borrow, LP) on the Base chain." },
+  { Column: "Net Capital ($)", Description: "Final capital after adding ETH value, LP, deducting gas and debt." },
+  { Column: "ETH Liquidation Price ($)", Description: "Price at which ETH would trigger liquidation based on current LTV." },
+  { Column: "Liquidated?", Description: "Whether your position would be liquidated this month ('Yes' or 'No')." },
+  { Column: "Profit ($)", Description: "Net capital + LP - Total Deposits, representing final profit/loss." }
+];
+
+// Utility
+const format = (val, digits = 2) => typeof val === "number" ? val.toFixed(digits) : val;
+
+function calculateIL(p0, p1) {
+  const r = p1 / p0;
+  return Math.max(0, 1 - (2 * Math.sqrt(r)) / (1 + r));
+}
+
+function createScenarioSheet(ethPricesAtEnd) {
+  const data = [];
+  let lpGrowth = 0;
+  let totalBorrowedAmount = 0;
+  let totalETHHeld = 0;
+  let totalETHHeldWithoutInterest = 0;
+  let totalDepositedAmount = 0;
+
+  for (let month = 1; month <= months; month++) {
+    const p0 = ethPricesAtEnd[month];
+    const purchasedEth = monthlyInvestment / p0;
+    totalETHHeldWithoutInterest += purchasedEth;
+    totalETHHeld += purchasedEth;
+    totalETHHeld *= (1 + monthlyInterestRate);
+
+    const totalETHValueInUSD = totalETHHeld * p0;
+    const totalCapital = totalETHValueInUSD + lpGrowth;
+
+    const targetBorrowAmount = totalCapital * 0.45;
+    const borrowedAmountInUSD = targetBorrowAmount - totalBorrowedAmount;
+    totalBorrowedAmount = (totalBorrowedAmount + borrowedAmountInUSD) * (1 + monthlyInterestRate);
+
+    lpGrowth += borrowedAmountInUSD;
+
+    const il = calculateIL(p0, 2200);
+    const lpFinal = lpGrowth * (1 - il);
+
+    const netCapitalInUSD = totalETHValueInUSD + lpFinal - totalBorrowedAmount - totalGasFeePerMonth;
+
+    let liquidationPrice = totalBorrowedAmount * liquidationThreshold / totalETHHeld;
+    liquidationPrice = liquidationPrice > 0 ? format(liquidationPrice) : "N/A";
+
+    const isLiquidated = totalBorrowedAmount > totalCapital * liquidationThreshold ? "Yes" : "No";
+
+    totalDepositedAmount += monthlyInvestment;
+    const profit = lpFinal + (netCapitalInUSD - totalDepositedAmount);
+    const borrowRatePercentage = (borrowedAmountInUSD / totalCapital) * 100;
+    const LTVPercentage = (totalBorrowedAmount / totalCapital) * 100;
+
+    data.push({
+      "Month": month,
+      "ETH Price at Deposit ($/ETH)": p0,
+      "Deposit Amount ($)": format(monthlyInvestment),
+      "Total ETH Held Without Interest (ETH)": format(totalETHHeldWithoutInterest, 6),
+      "Total ETH Held With Interest (ETH)": format(totalETHHeld, 6),
+      "Total ETH Value (USD)": format(totalETHValueInUSD),
+      "Borrowed Amount (This Month, $)": format(borrowedAmountInUSD),
+      "Total Borrowed with Interest ($)": format(totalBorrowedAmount),
+      "Borrow Rate (%)": format(borrowRatePercentage),
+      "LTV (%)": format(LTVPercentage),
+      "LP Growth ($)": format(lpGrowth),
+      "Impermanent Loss (%)": format(il * 100),
+      "LP Value After IL ($)": format(lpFinal),
+      "Gas Fee (Base Chain) ($)": format(totalGasFeePerMonth),
+      "Net Capital ($)": format(netCapitalInUSD),
+      "ETH Liquidation Price ($)": liquidationPrice,
+      "Liquidated?": isLiquidated,
+      "Profit ($)": format(profit)
+    });
+  }
+
+  return data;
+}
+
+// Create workbook
+const workbook = XLSX.utils.book_new();
+
+// Create README sheet
+const readmeSheet = XLSX.utils.json_to_sheet(columnDescriptions);
+XLSX.utils.book_append_sheet(workbook, readmeSheet, 'README');
+
+// Add each scenario as a separate sheet
+for (const [scenarioName, priceData] of Object.entries(ethPriceScenarios)) {
+  const sheetData = createScenarioSheet(priceData);
+  const sheet = XLSX.utils.json_to_sheet(sheetData);
+  XLSX.utils.book_append_sheet(workbook, sheet, scenarioName);
+}
+
+// Save the workbook
+const filename = `${asset} Long LP Strategy Simulation.xlsx`;
+XLSX.writeFile(workbook, filename);
+console.log(`✅ File generated: ${filename}`);
